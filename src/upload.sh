@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Upload files to file sharing websites
-# Copyright (c) 2010-2015 Plowshare team
+# Copyright (c) 2010-2016 Plowshare team
 #
 # This file is part of Plowshare.
 #
@@ -26,7 +26,8 @@ HELPFUL,H,longhelp,,Exhaustive help info (with modules command-line options)
 GETVERSION,,version,,Output plowup version information and exit
 ALLMODULES,,modules,,Output available modules (one per line) and exit. Useful for wrappers.
 EXT_PLOWSHARERC,,plowsharerc,f=FILE,Force using an alternate configuration file (overrides default search path)
-NO_PLOWSHARERC,,no-plowsharerc,,Do not use any plowshare.conf configuration file"
+NO_PLOWSHARERC,,no-plowsharerc,,Do not use any plowshare.conf configuration file
+NO_COLOR,,no-color,,Disables log notice & log error output coloring"
 
 declare -r MAIN_OPTIONS="
 VERBOSE,v,verbose,c|0|1|2|3|4=LEVEL,Verbosity level: 0=none, 1=err, 2=notice (default), 3=dbg, 4=report
@@ -46,8 +47,8 @@ CAPTCHA_ANTIGATE,,antigate,s=KEY,Antigate.com captcha key
 CAPTCHA_BHOOD,,captchabhood,a=USER:PASSWD,CaptchaBrotherhood account
 CAPTCHA_COIN,,captchacoin,s=KEY,captchacoin.com API key
 CAPTCHA_DEATHBY,,deathbycaptcha,a=USER:PASSWD,DeathByCaptcha account
+PRE_COMMAND,,run-before,F=PROGRAM,Call external program/script before new file processing
 PRINTF_FORMAT,,printf,s=FORMAT,Print results in a given format (for each successful upload). Default is \"%L%M%u%n\".
-NO_COLOR,,no-color,,Disables log notice & log error output coloring
 EXT_CURLRC,,curlrc,f=FILE,Force using an alternate curl configuration file (overrides ~/.curlrc)
 NO_CURLRC,,no-curlrc,,Do not use curlrc config file"
 
@@ -128,6 +129,7 @@ module_config_remote_upload() {
 # %s: filesize (in bytes)
 # %L: alias for "#DEL %d%n" or empty string (if %d is empty)
 # %M: alias for "#ADM %a%n" or empty string (if %a is empty)
+# %T: time of finished file upload ("HH:MM:SS" = date +%T)
 # and also:
 # %n: newline
 # %t: tabulation
@@ -139,7 +141,7 @@ module_config_remote_upload() {
 pretty_check() {
     # This must be non greedy!
     local S TOKEN
-    S=${1//%[fuUdDaAlmsLMnt%]}
+    S=${1//%[fuUdDaAlmsLMntT%]}
     TOKEN=$(parse_quiet . '\(%.\)' <<< "$S")
     if [ -n "$TOKEN" ]; then
         log_error "Bad format string: unknown sequence << $TOKEN >>"
@@ -178,7 +180,8 @@ pretty_print() {
     handle_tokens "$FMT" '%raw,%' '%t,	' "%n,$CR" \
         "%m,${A[0]}" "%l,${A[1]}" "%f,${A[2]}" "%u,${A[3]}" \
         "%d,${A[4]}" "%a,${A[5]}" "%U,$(json_escape "${A[3]}")" \
-        "%D,$(json_escape "${A[4]}")" "%A,$(json_escape "${A[5]}")"
+        "%D,$(json_escape "${A[4]}")" "%A,$(json_escape "${A[5]}")" \
+        "%T,$(date +%T)"
 }
 
 # Filename (arguments) printf format
@@ -268,7 +271,14 @@ done
 eval "$(process_core_options 'plowup' "$EARLY_OPTIONS" "$@")" || exit
 
 test "$HELPFUL" && { usage 1; exit 0; }
-test "$HELP" && { usage; exit 0; }
+if test "$HELP"; then
+    usage
+    if MODULE=$(module_exist MODULES[@] "${UNUSED_OPTS[0]}"); then
+        MODULES=("$MODULE")
+        print_module_options MODULES[@] UPLOAD
+    fi
+    exit 0
+fi
 test "$GETVERSION" && { echo "$VERSION"; exit 0; }
 
 if test "$ALLMODULES"; then
@@ -278,7 +288,14 @@ fi
 
 # Get configuration file options. Command-line is partially parsed.
 test -z "$NO_PLOWSHARERC" && \
-    process_configfile_options '[Pp]lowup' "$MAIN_OPTIONS" "$EXT_PLOWSHARERC"
+    process_configfile_options '[Pp]lowup' "${MAIN_OPTIONS}
+NO_COLOR,,no-color,,x" "$EXT_PLOWSHARERC"
+
+if [ -n "$NO_COLOR" ]; then
+    unset COLOR
+else
+    declare -r COLOR=yes
+fi
 
 declare -a COMMAND_LINE_MODULE_OPTS COMMAND_LINE_ARGS RETVALS
 COMMAND_LINE_ARGS=("${UNUSED_ARGS[@]}")
@@ -294,12 +311,6 @@ elif [ -z "$VERBOSE" ]; then
     declare -r VERBOSE=2
 fi
 
-if [ -n "$NO_COLOR" ]; then
-    unset COLOR
-else
-    declare -r COLOR=yes
-fi
-
 if [ "${#MODULES}" -le 0 ]; then
     log_error \
 "-------------------------------------------------------------------------------
@@ -309,6 +320,7 @@ Your plowshare installation has currently no module.
 In order to use plowup you must install some modules. Here is a quick start:
 $ plowmod --install
 -------------------------------------------------------------------------------"
+    exit $ERR_NOMODULE
 fi
 
 if [ $# -lt 1 ]; then
@@ -415,7 +427,7 @@ fi
 # Remove module name from argument list
 unset COMMAND_LINE_ARGS[0]
 
-set_exit_trap
+core_init 'plowup'
 
 UCOOKIE=$(create_tempfile) || exit
 URESULT=$(create_tempfile) || exit
@@ -475,13 +487,41 @@ for FILE in "${COMMAND_LINE_ARGS[@]}"; do
         DESTFILE=$(pretty_name_print DATA[@] "$NAME_FORMAT")
     fi
 
-    if match '[;,]' "$DESTFILE"; then
-        log_notice "Skipping ($LOCALFILE): curl can't upload filenames that contain , or ;"
-        continue
-    fi
-
     log_notice "Starting upload ($MODULE): $LOCALFILE"
     log_notice "Destination file: $DESTFILE"
+
+    # Pre-processing script (executed in a subshell)
+    if [ -n "$PRE_COMMAND" ]; then
+        URETVAL=0
+        (exec "$PRE_COMMAND" "$MODULE" "$LOCALFILE" "$DESTFILE" "$UCOOKIE") >/dev/null || URETVAL=$?
+
+        if [ $URETVAL -eq $ERR_NOMODULE ]; then
+            log_notice "Skipping file upload (as requested): $LOCALFILE"
+        elif [ $URETVAL -ne 0 ]; then
+            log_error "Pre-processing script exited with status $URETVAL, continue anyway"
+        fi
+    fi
+
+    SYMLINK=
+    if match '[;,]' "$LOCALFILE"; then
+        SYMLINK="$TMPDIR/$(basename_file "${LOCALFILE//[;,]/_}").$$.$RANDOM"
+        log_notice 'plowup: fix (symlink) local filename that contrain , or ; (because curl cannot upload it)'
+        log_debug "creating: $LOCALFILE => $SYMLINK"
+
+        # Complicated form of $(realpath "$LOCALFILE") but BSD friendly
+        ln -s "$(absolute_path "$LOCALFILE")/$(basename_file "$LOCALFILE")" "$SYMLINK"
+
+        # Swap SYMLINK and LOCALFILE variables (to not lose exact LOCALFILE string)
+        TRY=$LOCALFILE
+        LOCALFILE=$SYMLINK
+        SYMLINK=$TRY
+    fi
+
+    # Workaround if destination filename contain , or ;
+    # Note: Remote sites may not support filenames with such characters.
+    if match '[;,]' "$DESTFILE" && [ '"' != "${DESTFILE:0:1}" -a '"' != "${DESTFILE:(-1):1}" ]; then
+        DESTFILE="\"$DESTFILE\""
+    fi
 
     timeout_init $TIMEOUT
 
@@ -508,6 +548,16 @@ for FILE in "${COMMAND_LINE_ARGS[@]}"; do
                 log_debug 'arbitrary wait (from module)'
             fi
             wait ${AWAIT:-60} || { URETVAL=$?; break; }
+
+            # Unspecified retry but this error does not count as a retry
+            if [[ $MAXRETRIES -eq 0 ]]; then
+                log_notice "Starting upload ($MODULE): retry (after wait request)"
+                continue
+            fi
+        # Does not count as a retry
+        elif [ $URETVAL -eq $ERR_EXPIRED_SESSION ]; then
+            log_notice "Starting upload ($MODULE): retry (expired session)"
+            continue
         elif [[ $MAXRETRIES -eq 0 ]]; then
             break
         elif [ $URETVAL -ne $ERR_FATAL -a $URETVAL -ne $ERR_NETWORK -a \
@@ -526,6 +576,11 @@ for FILE in "${COMMAND_LINE_ARGS[@]}"; do
     done
 
     ${MODULE}_vars_unset
+
+    if [ -n "$SYMLINK" ]; then
+        rm -f "$LOCALFILE"
+        LOCALFILE=$SYMLINK
+    fi
 
     if [ $URETVAL -eq 0 ]; then
         { read DL_URL; read DEL_URL; read ADMIN_URL_OR_CODE; } <"$URESULT" || true

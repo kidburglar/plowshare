@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Easy module management (installation/update) utility
-# Copyright (c) 2015 Plowshare team
+# Copyright (c) 2015-2016 Plowshare team
 #
 # This file is part of Plowshare.
 #
@@ -23,17 +23,10 @@ declare -r VERSION='GIT-snapshot'
 # Default repository source
 declare -r LEGACY_MODULES='https://github.com/mcrapet/plowshare-modules-legacy.git'
 
-declare -r MAIN_OPTIONS="
-HELP,h,help,,Show help info and exit
-GETVERSION,,version,,Output plowmod version information and exit
-VERBOSE,v,verbose,c|0|1|2|3|4=LEVEL,Verbosity level: 0=none, 1=err, 2=notice (default), 3=dbg, 4=report
-QUIET,q,quiet,,Alias for -v0
-NO_COLOR,,no-color,,Disables log notice & log error output coloring
-MOD_DIR,,modules-directory,D=DIR,For maintainers only. Set modules directory (default is ~/.config/plowshare/modules.d)"
-declare -r ACTION_OPTIONS="
+declare -r ACTION_OPTIONS='
 DO_INSTALL,i,install,,Install one or several given repositories to modules directory
 DO_STATUS,s,status,,Print current modules configuration
-DO_UPDATE,u,update,,Update modules directory (requires git)"
+DO_UPDATE,u,update,,Update modules directory (requires git)'
 
 # This function is duplicated from download.sh
 absolute_path() {
@@ -69,7 +62,7 @@ EOH
     print_options "$ACTION_OPTIONS"
     cat <<EOH
 
-For install, if no source repositoy is specified use:
+For install, if no source repository is specified, it uses:
 $LEGACY_MODULES
 
 Available options:
@@ -99,12 +92,19 @@ mod_install() {
     log_notice "- installing new directory: $L"
 
     if [ -d "$L" -a -n "$HAVE_GIT" ]; then
+        # Note: git -C <path> is available since v1.8.5
         if git -C "$L" rev-parse --is-inside-work-tree &>/dev/null; then
             log_notice 'WARNING: directory already exists! Do a git pull.'
             git -C "$L" pull --quiet
         else
-            log_error 'ERROR: directory exists but it does not appear to be a git repository, abort'
-            RET=$ERR_FATAL
+            # Check for empty directory (find -empty)
+            if [[ ! $(ls -1A "$L" 2>/dev/null) ]] && [ -w "$L" ]; then
+                # Be stupid for now and git clone. See --depth later.
+                git clone --quiet "$R" "$L"
+            else
+                log_error 'ERROR: directory exists but it does not appear to be a git repository, abort'
+                RET=$ERR_FATAL
+            fi
         fi
     else
         # Be stupid for now and git clone. See --depth later.
@@ -124,6 +124,7 @@ mod_update() {
 
     if [ -d "$L" ]; then
         if [ -n "$HAVE_GIT" ]; then
+            # Note: git -C <path> is available since v1.8.5
             if git -C "$L" rev-parse --is-inside-work-tree &>/dev/null; then
                 git -C "$L" pull --quiet
             else
@@ -167,7 +168,7 @@ mod_status() {
     fi
 
     # Check for first install
-    N=$(grep '^[^#]' "${SRCS[@]/%/\/config}" | wc -l)
+    N=$(grep '^[^#]' "${SRCS[@]/%//config}" | wc -l)
     if (( N == 0 )); then
         log_error \
 "-------------------------------------------------------------------------------
@@ -237,6 +238,14 @@ set -e # enable exit checking
 
 source "$LIBDIR/core.sh"
 
+declare -r MAIN_OPTIONS="
+HELP,h,help,,Show help info and exit
+GETVERSION,,version,,Output plowmod version information and exit
+VERBOSE,v,verbose,c|0|1|2|3|4=LEVEL,Verbosity level: 0=none, 1=err, 2=notice (default), 3=dbg, 4=report
+QUIET,q,quiet,,Alias for -v0
+NO_COLOR,,no-color,,Disables log notice & log error output coloring
+MOD_DIR,,modules-directory,D=DIR,For maintainers only. Set modules directory (default is ${PLOWSHARE_CONFDIR/#$HOME/\~}/modules.d)"
+
 # Process command-line (plowmod options).
 # Note: Ignore returned UNUSED_ARGS[@], it will be empty.
 eval "$(process_core_options 'plowmod' "$MAIN_OPTIONS$ACTION_OPTIONS" "$@")" || exit
@@ -255,7 +264,7 @@ if [ -n "$QUIET" ]; then
     if [ -z "$VERBOSE" ]; then
         declare -r VERBOSE=0
     else
-        log_notice "WARNING: --quiet switch conflits with --verbose=$VERBOSE, ignoring -q"
+        log_notice "WARNING: --quiet switch conflicts with --verbose=$VERBOSE, ignoring -q"
     fi
 elif [ -z "$VERBOSE" ]; then
     declare -r VERBOSE=2
@@ -310,7 +319,7 @@ if check_exec 'git'; then
     log_report "[git ] $(git --version)"
 fi
 
-set_exit_trap
+core_init 'plowmod'
 
 declare -a RETVALS
 
@@ -332,6 +341,8 @@ elif [ -n "$DO_UPDATE" ]; then
         mod_update "$U" || RETVAL=$?
         RETVALS+=($RETVAL)
     done < <(find "$DDIR" -mindepth 2 -maxdepth 2 -name config)
+    test "$RETVAL" || \
+        log_notice "plowmod: no directory found, have you invoked \`plowmod --install' first?"
 fi
 
 if [ ${#RETVALS[@]} -eq 0 ]; then

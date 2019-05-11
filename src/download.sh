@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Download files from file sharing websites
-# Copyright (c) 2010-2015 Plowshare team
+# Copyright (c) 2010-2016 Plowshare team
 #
 # This file is part of Plowshare.
 #
@@ -26,7 +26,8 @@ HELPFUL,H,longhelp,,Exhaustive help info (with modules command-line options)
 GETVERSION,,version,,Output plowdown version information and exit
 ALLMODULES,,modules,,Output available modules (one per line) and exit. Useful for wrappers.
 EXT_PLOWSHARERC,,plowsharerc,f=FILE,Force using an alternate configuration file (overrides default search path)
-NO_PLOWSHARERC,,no-plowsharerc,,Do not use any plowshare.conf configuration file"
+NO_PLOWSHARERC,,no-plowsharerc,,Do not use any plowshare.conf configuration file
+NO_COLOR,,no-color,,Disables log notice & log error output coloring"
 
 declare -r MAIN_OPTIONS="
 VERBOSE,v,verbose,c|0|1|2|3|4=LEVEL,Verbosity level: 0=none, 1=err, 2=notice (default), 3=dbg, 4=report
@@ -37,6 +38,7 @@ OUTPUT_DIR,o,output-directory,D=DIR,Directory where files will be saved
 TEMP_DIR,,temp-directory,D=DIR,Directory for temporary files (final link download, cookies, images)
 TEMP_RENAME,,temp-rename,,Append .part suffix to filename while file is being downloaded
 MAX_LIMIT_RATE,,max-rate,r=SPEED,Limit maximum speed to bytes/sec (accept usual suffixes)
+MIN_LIMIT_RATE,,min-rate,r=SPEED,Limit minimum speed to bytes/sec (during 30 seconds)
 MIN_LIMIT_SPACE,,min-space,R=LIMIT,Set the minimum amount of disk space to exit.
 INTERFACE,i,interface,s=IFACE,Force IFACE network interface
 TIMEOUT,t,timeout,n=SECS,Timeout after SECS seconds of waits
@@ -53,7 +55,6 @@ PRE_COMMAND,,run-before,F=PROGRAM,Call external program/script before new link p
 POST_COMMAND,,run-after,F=PROGRAM,Call external program/script after link being successfully processed
 SKIP_FINAL,,skip-final,,Don't process final link (returned by module), just skip it (for each link)
 PRINTF_FORMAT,,printf,s=FORMAT,Print results in a given format (for each successful download). Default is \"%F%n\".
-NO_COLOR,,no-color,,Disables log notice & log error output coloring
 NO_MODULE_FALLBACK,,fallback,,If no module is found for link, simply download it (HTTP GET)
 EXT_CURLRC,,curlrc,f=FILE,Force using an alternate curl configuration file (overrides ~/.curlrc)
 NO_CURLRC,,no-curlrc,,Do not use curlrc config file"
@@ -142,10 +143,19 @@ mark_queue() {
         if [ 'file' = "$1" ]; then
             if test -w "$FILE"; then
                 local -r D=$'\001' # sed separator
-                test "$FILENAME" && FILENAME="${FILENAME//&/\\&}\n"
-                sed -i -e "s$D^[[:space:]]*\(${URL//\\/\\\\/}[[:space:]]*\)\$$D$FILENAME$STATUS \1$D" "$FILE" &&
-                    log_notice "link marked in file \`$FILE' ($STATUS)" ||
+                local SRET=0
+                if [ -z "$FILENAME" ]; then
+                    sed -i -e "s$D^[[:space:]]*\(${URL//\\/\\\\/}[[:space:]]*\)\$$D$STATUS \1$D" "$FILE" || SRET=$?
+                else
+                    # Don't write filename if it is already present
+                    sed -i -e "\\$D^[[:space:]]*#[[:space:]]*${FILENAME:2}\r\?\$$D{N}" \
+                        -e "s$D^\([[:space:]]*#[[:space:]]*${FILENAME:2}\r\?\n\)\?[[:space:]]*\(${URL//\\/\\\\/}[[:space:]]*\r\?\)\$$D${FILENAME//&/\\&}\n$STATUS \2$D" "$FILE" || SRET=$?
+                fi
+                if [ $SRET -eq 0 ]; then
+                    log_notice "link marked in file \`$FILE' ($STATUS)"
+                else
                     log_error "failed marking link in file \`$FILE' ($STATUS)"
+                fi
             else
                 log_error "Can't mark link, no write permission ($FILE)"
             fi
@@ -297,6 +307,8 @@ download() {
             DRETVAL=0
             $FUNCTION "$COOKIE_FILE" "$URL_ENCODED" >"$DRESULT" || DRETVAL=$?
 
+            # $ERR_LINK_TEMP_UNAVAILABLE and $ERR_EXPIRED_SESSION
+            # do not count as a retry
             if [ $DRETVAL -eq $ERR_LINK_TEMP_UNAVAILABLE ]; then
                 read AWAIT <"$DRESULT"
                 if [ -z "$AWAIT" ]; then
@@ -305,6 +317,9 @@ download() {
                     log_debug 'arbitrary wait (from module)'
                 fi
                 wait ${AWAIT:-60} || { DRETVAL=$?; break; }
+                continue
+            elif [ $DRETVAL -eq $ERR_EXPIRED_SESSION ]; then
+                log_notice 'expired session: delete cache entry'
                 continue
             elif [[ $MAX_RETRIES -eq 0 ]]; then
                 break
@@ -777,7 +792,14 @@ fi
 
 # Get configuration file options. Command-line is partially parsed.
 test -z "$NO_PLOWSHARERC" && \
-    process_configfile_options '[Pp]lowdown' "$MAIN_OPTIONS" "$EXT_PLOWSHARERC"
+    process_configfile_options '[Pp]lowdown' "${MAIN_OPTIONS}
+NO_COLOR,,no-color,,x" "$EXT_PLOWSHARERC"
+
+if [ -n "$NO_COLOR" ]; then
+    unset COLOR
+else
+    declare -r COLOR=yes
+fi
 
 declare -a COMMAND_LINE_MODULE_OPTS COMMAND_LINE_ARGS RETVALS
 COMMAND_LINE_ARGS=("${UNUSED_ARGS[@]}")
@@ -793,12 +815,6 @@ elif [ -z "$VERBOSE" ]; then
     declare -r VERBOSE=2
 fi
 
-if [ -n "$NO_COLOR" ]; then
-    unset COLOR
-else
-    declare -r COLOR=yes
-fi
-
 if [ "${#MODULES}" -le 0 ]; then
     log_error \
 "-------------------------------------------------------------------------------
@@ -808,6 +824,7 @@ Your plowshare installation has currently no module.
 In order to use plowdown you must install some modules. Here is a quick start:
 $ plowmod --install
 -------------------------------------------------------------------------------"
+    exit $ERR_NOMODULE
 fi
 
 if [ $# -lt 1 ]; then
@@ -825,6 +842,13 @@ if [ -n "$EXT_PLOWSHARERC" ]; then
     else
         log_notice 'plowdown: using alternate configuration file'
     fi
+fi
+
+if [ -n "$MAX_LIMIT_RATE" -a -n "$MIN_LIMIT_RATE" ]; then
+  if (( MAX_LIMIT_RATE < MIN_LIMIT_RATE )); then
+      log_error "--min-rate ($MIN_LIMIT_RATE) is greater than --max-rate ($MAX_LIMIT_RATE)"
+      exit $ERR_BAD_COMMAND_LINE
+  fi
 fi
 
 if [ -n "$TEMP_DIR" ]; then
@@ -891,7 +915,7 @@ if [ ${#COMMAND_LINE_ARGS[@]} -eq 0 ]; then
     exit $ERR_BAD_COMMAND_LINE
 fi
 
-set_exit_trap
+core_init 'plowdown'
 
 # Remember last host because hosters may require waiting between
 # successive downloads.

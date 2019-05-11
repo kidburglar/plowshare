@@ -5,7 +5,7 @@ Runtime dependencies
 
 To run plowshare you will need:
 
-* GNU/Linux basic operating system : coreutils (chmod, date, ...), sed, util-linux (kill), grep.
+* GNU/Linux basic operating system: coreutils (chmod, date, ...), sed, util-linux (kill), grep.
   Note for BSD/Mac OSX: requires gnu-sed.
 * Bash (version 4.1 or better). It will NOT work using Busybox or Dash (POSIX) shell.
 * cURL (version 7.24 or better). Compiled with SSL support.
@@ -47,18 +47,22 @@ No compiler is required, it's only Bash scripts!
 This is the easiest method, Plowshare is available for several Linux distribution:
 
 # Archlinux (https://www.archlinux.org/packages/community/any/plowshare/)
-$ yaourt -Sy plowshare
+$ pacman -Syu plowshare
 
 # Gentoo (http://packages.gentoo.org/package/net-misc/plowshare)
 $ emerge -av plowshare
 
-# Debian (https://packages.debian.org/sid/plowshare4)
-$ apt-get install plowshare4
+# Debian (https://packages.debian.org/sid/plowshare)
+# Note: For Debian 8 "Jessie", the package is called plowshare4. Recent versions are included in jessie-backports.
+$ apt-get install plowshare
 
 # Fedora & CentOS (https://admin.fedoraproject.org/updates/plowshare)
 $ yum install plowshare
 
-PS: You'll probably need to be root to execute the plowshare package.
+Note: You'll probably need to be root to install the plowshare package.
+
+# Mac OS X (with Homebrew)
+$ brew install plowshare
 
 2) Manual method: from git sources
 
@@ -71,20 +75,19 @@ $ sudo make install
 # (make sure you have $HOME/local/bin in you PATH)
 $ make install PREFIX=$HOME/local
 
-Note for BSD users (Free BSD & Mac OSX)
-------------------
+Note for FreeBSD users
+----------------------
 You must manually install from sources.
 You'll need GNU make (not bmake) and gnu-sed (or gsed) installed.
 Don't forget to properly define GNU_SED variable.
 
 # For example
-$ make install GNU_SED=/opt/bin/gnu-sed PREFIX=/usr
-$ make patch_gnused GNU_SED=/opt/bin/gnu-sed PREFIX=/usr
+$ make install patch_gnused GNU_SED=/opt/bin/gnu-sed PREFIX=/usr
 
 Advanced users and maintainers
 ------------------------------
 
-# If you are on a cross compilation environment:
+# If you are on a cross-compilation environment:
 # (default prefix is /usr)
 $ make install DESTDIR=/media/rootfs
 or
@@ -100,7 +103,7 @@ $ plowmod --install
 
 plowmod is a simple tool for managing your modules directory (~/.config/plowshare/modules.d).
 
-If git (>1.8.5) is installed, you can use later:
+If git (>1.8.5) is installed on your system, you can use later:
 $ plowmod --update
 
 Plowmod can handle 3rd part repositories. See man page for more information.

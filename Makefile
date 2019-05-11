@@ -1,11 +1,12 @@
 ##
-# Plowshare Makefile (requires GNU sed)
+# Plowshare Makefile
 # Usage:
 # - make PREFIX=/usr/local install
 # - make PREFIX=/usr/local DESTDIR=/tmp/packaging install
 #
-# Important note for OpenBSD, NetBSD and Mac OS X users:
-# Be sure to properly define GNU_SED variable (gsed or gnu-sed).
+# Important notes for OpenBSD, NetBSD and Mac OS X users:
+# - GNU make is required (for installation only), bmake does not support "addprefix" and "wildcard".
+# - GNU sed is required, be sure to properly define GNU_SED variable (gsed or gnu-sed)
 ##
 
 # Tools
@@ -91,4 +92,10 @@ patch_gnused: install_files
 		$(GNU_SED) -i -e '/\/licenses\/>/ashopt -s expand_aliases; alias sed='\''$(GNU_SED)'\' "$(DESTDIR)$(DATADIR)/$$file"; \
 	done
 
-.PHONY: install uninstall install_files patch_git_version patch_bash_completion patch_gnused
+# Shrink scripts by ~30%
+minify: install_files
+	@for file in $(SRCS); do \
+		$(GNU_SED) -nf scripts/minify.sed -i "$(DESTDIR)$(DATADIR)/$$file"; \
+	done
+
+.PHONY: install uninstall install_files patch_git_version patch_bash_completion patch_gnused minify

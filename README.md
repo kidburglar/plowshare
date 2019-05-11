@@ -15,13 +15,13 @@ Plowshare is divided into 6 scripts:
 Plowshare itself doesn't support any websites (named *module*). It's just the core engine.
 Concerning modules, few are available separately and must be installed in user directory (see [below](#install)).
 
-### Features
+### Features
 
 - Small footprint (few shell scripts). No java, no python. Run fast on embedded devices.
 - Few dependencies and portable. [Bash](https://www.gnu.org/software/bash/) and [cURL](http://curl.haxx.se/) are enough for most hosters.
 - Modules (hoster plugins) are simple to write using [Plowshare API](#implement-your-own-modules).
 - Support for automatic online captcha solver services.
-- Cache mecanism: hoster session or cookie reuse (to avoid relogin).
+- Cache mechanism: hoster session or cookie reuse (to avoid relogin).
 
 ## Install
 
@@ -30,7 +30,7 @@ See `INSTALL` file for details.
 ## Usage examples
 
 All scripts share the same verbose options:
-- `-v0` (alias: `-q`)
+- `-v0` (be quiet, alias: `-q`)
 - `-v1` (errors only)
 - `-v2` (infos message; default)
 - `-v3` (show all messages)
@@ -38,7 +38,7 @@ All scripts share the same verbose options:
 
 Getting help:
 - `--help`
-- `--longhelp` (*plowdown* & *plowup* only, prints modules command-line options)
+- `--longhelp` (additionally prints modules command-line options)
 
 Exhaustive documentation is available in manpages.
 
@@ -59,12 +59,13 @@ $ plowdown -a 'myuser:mypassword' http://rapidgator.net/file/49b1b874
 ```
 
 **Note**: `:` is the separator character for login and password.
+Enclosing string using single quotes ensure against shell expansion.
 
 Download a list of links (one link per line):
 
 ```sh
 $ cat file_with_links.txt
-# This is a comment
+# This is a comment
 http://depositfiles.com/files/abcdefghi
 http://www.rapidshare.com/files/86545320/Tux-Trainer_25-01-2008.rar
 $ plowdown file_with_links.txt
@@ -119,6 +120,15 @@ Avoid never-ending downloads: limit the number of tries (for captchas) and wait 
 $ plowdown --max-retries=4 --timeout=3600 my_big_list_file.txt
 ```
 
+Retrieve final url (don't use *plowdown* for download):
+
+```sh
+$ plowdown -q --skip-final --printf %d http://oron.com/dw726z0ohky5 | xargs wget
+```
+
+**Note**: This will not work if final url (remote host) requires a cookie. For anonynous users,
+generated link has limited access in time and you can usually download file only once.
+
 ### Plowup
 
 Upload a single file anonymously to BayFiles:
@@ -141,7 +151,7 @@ Upload a file to Rapidshare with an account (premium or free)
 $ plowup -a 'myuser:mypassword' rapidshare /path/xxx
 ```
 
-Upload a file to Mirrorcreator changing uploaded filename:
+Upload a file to Mirrorcreator changing remote filename:
 
 ```sh
 $ plowup mirrorcreator /path/myfile.txt:anothername.txt
@@ -175,7 +185,30 @@ Modify remote filenames (example: `foobar.rar` gives `foobar-PLOW.rar`):
 $ plowup --name='%g-PLOW.%x' mirrorcreator *.rar
 ```
 
-**Remark**: Be aware that cURL is not capable of uploading files containing a comma `,` in their name, so make sure to rename them before using *plowup*.
+**Remark**: cURL is not capable of uploading files containing a comma `,` in their filename, but *plowup* will
+temporarily create a symlink for you.
+
+Use cache over sessions to avoid multiple logins:
+
+```sh
+$ plowup --cache=shared -a 'user:pasword' 1fichier file1.zip
+$ plowup --cache=shared 1fichier file2.zip
+```
+
+On first command line, login stage will be performed and session (token or cookie) will be saved in
+`~/.config/plowshare/storage/module-name.txt`.
+On second command line, *plowup* will reuse the data stored to bypass login step. You don't have to specify credentials.
+
+**Note**: Only few hosters currently support cache mechanism. Have a look to
+[Plowshare legacy modules matrix](https://github.com/mcrapet/plowshare-modules-legacy) for more information.
+
+Custom results, print upload time, link and filename in HTML format:
+
+```sh
+$ plowup 1fichier -v0 --printf '<li>%T: <a href="%u">%f</a>%n' 5MiB.bin 10MB.bin
+<li>11:12:42: <a href="https://1fichier.com/?52jwehc851">5MiB.bin</a>
+<li>11:12:46: <a href="https://1fichier.com/?bn1jdvtpqi">10MB.bin</a>
+```
 
 ### Plowdel
 
@@ -238,14 +271,19 @@ Filter alive links in a text file:
 $ plowprobe file_with_links.txt > file_with_active_links.txt
 ```
 
-Custom results format: print links informations (filename and size). Shell and [JSON](http://json.org/) output.
+Custom results as shell format, print links information (filename and size):
 
 ```sh
 $ plowprobe --printf '#%f (%s)%n%u%n'  http://myhoster.com/files/5njdw7
+#foo-bar.rar (134217728)
+http://myhoster.com/files/5njdw7
 ```
+
+Custom results as [JSON](http://json.org/) format, print links information (filename and size):
 
 ```sh
 $ plowprobe --printf '{"url":"%U","size":%s}%n' http://myhoster.com/files/5njdw7
+{"url":"http:\/\/myhoster.com\/files\/5njdw7","size":134217728}
 ```
 
 Custom results: print *primary* url (if supported by hosters and implemented by module):
@@ -418,7 +456,7 @@ Database using image hash as key:
 ```sh
 #!/bin/sh
 #
-# Back to february 2009, Megaupload was using 4-character rotation captchas.
+# Back to February 2009, Megaupload was using 4-character rotation captchas.
 # For example:
 # $ sqlite3 captchas.db
 # sqlite> CREATE TABLE mu (md5sum text unique not null, captcha text not null);
@@ -441,7 +479,7 @@ exit 2
 
 ### Hooks
 
-It is possible to execute your own script before and after call to module download function. 
+It is possible to execute your own script before and after call to module download function.
 Related command-line switches are `--run-before` and `--run-after`.
 
 Possible usage:
@@ -494,7 +532,7 @@ Example 3: Use multiple connections for final download (usually only for premium
 ```sh
 $ cat finalaria.sh
 #!/bin/bash
-aria2c -x2 $4
+aria2c -x2 $4 >/dev/tty
 
 $ plowdown -a user:password --skip-final --run-after ./finalaria.sh \
     http://depositfiles.com/files/fv2u9xqya
@@ -528,10 +566,10 @@ $ echo 'socks5=localhost:3128' >>~/.curlrc
 
 For historical reasons or design choices, there are several known limitations to Plowshare.
 
-1. You cannot enter through command-line several credentials for different hosts. 
+1. You cannot enter through command-line several credentials for different hosts.
    It's because the modules option `-a`, `--auth`, `-b` or `--auth-free` have the same switch name.
    But you can do it with the configuration file.
-2. Same restriction for passwords (*plowdown*). Only one password can be defined with `-p`, `--link-password` switch name.
+2. Same restriction for passwords (also a module option). Only one password can be defined with `-p`, `--link-password` switch name.
 
 ### Implement your own modules
 
